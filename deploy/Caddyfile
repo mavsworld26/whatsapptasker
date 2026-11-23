@@ -3,7 +3,7 @@
 	# Only webhooks and health checks are public. Everything else is 404 at the app.
 	@public path /webhooks/whatsapp /webhooks/razorpay /health
 	handle @public {
-		reverse_proxy app:8080
+		reverse_proxy 127.0.0.1:8080
 	}
 	handle {
 		respond 404

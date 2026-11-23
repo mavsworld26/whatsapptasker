@@ -4,7 +4,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    expose: ["8080"]
+    # Only reachable from this server; Caddy is the public entry point.
+    ports: ["127.0.0.1:8080:8080"]
     volumes:
       - ./data:/app/data
       - ./backups:/app/backups
@@ -13,10 +14,11 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
   caddy:
-    # Automatic HTTPS (Let's Encrypt) in front of the app. Set DOMAIN in .env and point DNS at this host.
+    # Automatic HTTPS (Let's Encrypt). Host networking avoids Docker port-forwarding/firewall conflicts:
+    # Caddy binds 80/443 directly, so the host firewall (ufw) rules apply as written.
     image: caddy:2
     restart: unless-stopped
-    ports: ["80:80", "443:443"]
+    network_mode: host
     environment:
       - DOMAIN=${DOMAIN}
     volumes:

@@ -1,0 +1,17 @@
+{
+  "name": "hyd-tasks-whatsapp-marketplace",
+  "version": "1.0.0-pilot",
+  "private": true,
+  "type": "module",
+  "description": "WhatsApp-only local task marketplace for Hyderabad (WhatsApp Business Platform + Razorpay Route)",
+  "engines": { "node": ">=22.16 <23 || >=24" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "check:config": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/check-config.js",
+    "backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/backup.js",
+    "demo": "node --disable-warning=ExperimentalWarning scripts/demo.js"
+  },
+  "license": "UNLICENSED"
+}

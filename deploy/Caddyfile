@@ -1,0 +1,15 @@
+{$DOMAIN} {
+	encode gzip
+	# Only webhooks and health checks are public. Everything else is 404 at the app.
+	@public path /webhooks/whatsapp /webhooks/razorpay /health
+	handle @public {
+		reverse_proxy app:8080
+	}
+	handle {
+		respond 404
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}

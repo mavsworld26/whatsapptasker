@@ -1,0 +1,27 @@
+# Single-instance pilot deployment. SQLite requires exactly ONE replica — never scale this service horizontally.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    expose: ["8080"]
+    volumes:
+      - ./data:/app/data
+      - ./backups:/app/backups
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+  caddy:
+    # Automatic HTTPS (Let's Encrypt) in front of the app. Set DOMAIN in .env and point DNS at this host.
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [app]
+volumes:
+  caddy_data:

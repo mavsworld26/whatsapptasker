@@ -1,0 +1,2 @@
+# /etc/cron.d/hyd-tasks-backup — hourly encrypted off-site backup (adjust paths, GPG recipient and bucket).
+15 * * * * root cd /opt/hyd-tasks && docker compose exec -T app node --disable-warning=ExperimentalWarning scripts/backup.js /app/backups && f=$(ls -t backups/*.sqlite | head -1) && gpg --batch --yes -r ops@your-company.example -e "$f" && rm "$f" && aws s3 cp "$f.gpg" s3://YOUR-BACKUP-BUCKET/hyd-tasks/ --sse aws:kms

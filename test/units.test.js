@@ -5,7 +5,7 @@ import { findArea, nearestArea, distanceKm, AREAS } from '../src/areas.js';
 import { LANGS, allKeys, catalog, detectLang, t } from '../src/i18n.js';
 import { rankWorkersForTask, rankOffers, priceBreakdown, bayesianRating } from '../src/matching.js';
 import { parseCommand } from '../src/marketplace/commands.js';
-import { readConfig, liveReadinessProblems, parseAdmins } from '../src/config.js';
+import { readConfig, liveReadinessProblems, fatalLiveProblems, parseAdmins } from '../src/config.js';
 import { maskContactDetails } from '../src/marketplace/support.js';
 import { START } from './helpers.js';
 
@@ -125,6 +125,10 @@ test('config: live mode readiness is explicit and admin roles are validated', ()
   assert.throws(() => parseAdmins('919111111111:god'), /Unknown admin role/);
   assert.throws(() => readConfig({ FEE_RATE_HOUSEHOLD: '2' }), /Invalid numeric/);
   assert.equal(readConfig({}).paymentsEnabled, false);
+  // Staging may run live WhatsApp without payments; production may not.
+  const wa = { DRY_RUN: 'false', WA_APP_SECRET: 's', WA_VERIFY_TOKEN: 'x'.repeat(32), WA_ACCESS_TOKEN: 't', WA_PHONE_NUMBER_ID: '1', PUBLIC_BASE_URL: 'https://a.example', ADMIN_PHONES: '61405441476:super' };
+  assert.deepEqual(fatalLiveProblems(readConfig({ ...wa, APP_ENV: 'staging' })), []);
+  assert.match(fatalLiveProblems(readConfig({ ...wa, APP_ENV: 'production' })).join('\n'), /RAZORPAY_KEY_ID/);
 });
 
 test('contact details are masked in relayed messages', () => {

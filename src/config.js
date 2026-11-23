@@ -115,7 +115,10 @@ export function liveReadinessProblems(config) {
   return p;
 }
 
-// Template gaps degrade (messages wait for the user to message again); everything else is fatal.
+// Template gaps degrade (messages wait for the user to message again). Outside production, missing payment
+// setup also degrades: bookings are refused ("payments not active") so WhatsApp flows can be tested first.
+const STAGING_WARNINGS = [/^WA_TEMPLATES/, /^RAZORPAY_/, /^FINANCE_REQUIRE_COSIGN/, /^TERMS_VERSION/];
 export function fatalLiveProblems(config) {
-  return liveReadinessProblems(config).filter(x => !x.startsWith('WA_TEMPLATES'));
+  return liveReadinessProblems(config).filter(x => !x.startsWith('WA_TEMPLATES') &&
+    !(config.appEnv !== 'production' && STAGING_WARNINGS.some(re => re.test(x))));
 }

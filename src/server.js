@@ -66,7 +66,7 @@ export function createServer(market, config, { onWork = () => {}, isReady = () =
         const raw = await readBody(req);
         if (!isValidMetaSignature(raw, req.headers['x-hub-signature-256'], config.appSecret)) return json(res, 401, { error: 'invalid signature' });
         const payload = parseJson(raw);
-        if (payload.object !== 'whatsapp_business_account') return json(res, 200, { ignored: true });
+        if (!payload || typeof payload !== 'object' || payload.object !== 'whatsapp_business_account') return json(res, 200, { ignored: true });
         const { messages, statuses } = parseWebhook(payload, config.phoneNumberId);
         let processed = 0, failed = 0;
         for (const message of messages) {
@@ -90,6 +90,7 @@ export function createServer(market, config, { onWork = () => {}, isReady = () =
         const raw = await readBody(req);
         if (!verifyRazorpaySignature(raw, req.headers['x-razorpay-signature'], config.razorpayWebhookSecret)) return json(res, 401, { error: 'invalid signature' });
         const event = parseJson(raw);
+        if (!event || typeof event !== 'object' || typeof event.event !== 'string') return json(res, 400, { error: 'invalid event' });
         const eventId = req.headers['x-razorpay-event-id'] || `${event.event}:${event.created_at}:${event.payload?.payment?.entity?.id || event.payload?.payment_link?.entity?.id || event.payload?.refund?.entity?.id || ''}`;
         const result = transactional(market.db, () => handleRazorpayEvent(market, event, String(eventId).slice(0, 200)));
         json(res, 200, result);

@@ -228,6 +228,9 @@ export class Marketplace {
       case 'OFFER': return worker.makeOffer(this, phone, args);
       case 'WITHDRAW': return worker.withdraw(this, phone, args[0]);
       case 'DONE': return worker.done(this, phone, args[0]);
+      case 'ARRIVED':
+      case 'STARTED': return worker.arrived(this, phone, args[0]);
+      case 'NOSHOW': return customer.noShow(this, phone, args[0]);
       case 'AGREE': return this.sendMenu(phone);
       case 'MENU': return this.sendMenu(phone);
       default:

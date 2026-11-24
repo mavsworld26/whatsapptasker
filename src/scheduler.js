@@ -31,7 +31,7 @@ export function sweep(market) {
         counts.expiredTasks++;
       }
     }
-    for (const t of db.prepare("SELECT * FROM tasks WHERE status='booked' AND scheduled_at < ?").all(now - 12 * 3600000)) {
+    for (const t of db.prepare("SELECT * FROM tasks WHERE status IN ('booked','in_progress') AND scheduled_at < ?").all(now - 12 * 3600000)) {
       const alerted = db.prepare("SELECT 1 FROM audit WHERE action='overdue_alert' AND ref=?").get(String(t.id));
       if (alerted) continue;
       market.audit('system', 'overdue_alert', t.id);

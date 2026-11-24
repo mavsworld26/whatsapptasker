@@ -32,7 +32,9 @@ Jobs that mention electrical, gas, childcare, eldercare, medical, cash handling,
   - `refund`: the customer gets the full amount (worker share reversed, fee refunded).
   - `split 200`: the customer gets ₹200, taken from the tasker's share; the rest is released to the tasker.
 - With `FINANCE_REQUIRE_COSIGN=true`, a **second** finance operator must send `COSIGN <id>` (or `DECLINE <id> reason`). The requester cannot co-sign.
-- Goodwill or late-cancellation refunds: `REFUND HYD… full|<rupees> reason`. This also needs a co-sign.
+- `RESOLVE 7 split 200` on a job that is still **booked** (a late cancellation ticket) cancels the job: the customer gets ₹200 back from the tasker's share and the rest is released to the tasker as a cancellation fee.
+- Goodwill refunds: `REFUND HYD… <rupees> reason` is **platform-funded**. It does not change the job or touch the tasker's payout. `REFUND HYD… full reason` refunds everything and reverses the tasker's share if it is still held. Both need a co-sign.
+- No-shows: customers can send `NOSHOW HYD…` from 30 minutes after the start time if the tasker never sent `ARRIVED`. This triggers a full refund automatically; two no-shows auto-suspend the tasker.
 - After a payout is released, a refund comes from platform funds. Finance is alerted and must recover the money manually if appropriate.
 - Refund failures (`❗ Refund … FAILED`) must be fixed in the Razorpay Dashboard the same day. The customer has already been told support is handling it.
 

@@ -24,6 +24,7 @@ test('happy path: post → bid → accept → Razorpay link → verified capture
   x.send(P.customer, 'CONFIRM HYD0001');
   assert.equal(x.task().status, 'booked', 'cannot confirm before the worker marks done');
   x.send(P.stranger, 'DONE HYD0001');
+  x.advance(24 * 3600000); // job start time reached (DONE is refused before it)
   x.send(P.worker, 'DONE HYD0001');
   assert.equal(x.task().status, 'awaiting_confirmation');
   const ask = x.messages(P.customer).at(-1);
@@ -168,6 +169,7 @@ test('worker cancels a booked job: customer refunded, task reopens with other of
 test('dispute holds payout; finance needs two-person co-sign; split refund reverses part and releases the rest', async () => {
   const x = setup();
   const p = await bookedFlow(x);
+  x.advance(24 * 3600000);
   x.send(P.worker, 'DONE HYD0001');
   x.send(P.stranger, 'DISPUTE HYD0001 not my job at all');
   assert.equal(x.task().status, 'awaiting_confirmation');
@@ -200,6 +202,7 @@ test('dispute holds payout; finance needs two-person co-sign; split refund rever
 test('auto-confirm releases payout after the configured window when no problem is reported', async () => {
   const x = setup();
   await bookedFlow(x);
+  x.advance(24 * 3600000);
   x.send(P.worker, 'DONE HYD0001');
   x.advance(47 * 3600000); x.app.sweep();
   assert.equal(x.task().status, 'awaiting_confirmation');

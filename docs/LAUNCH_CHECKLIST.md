@@ -1,6 +1,6 @@
 # Launch checklist: items that need YOUR credentials, approvals or legal action
 
-Engineering status (23 Nov 2026): the code is complete for a controlled pilot, and 37 automated tests pass. Nothing below has been obtained or approved yet. None of it can be done by engineering alone. Review times are set by Meta, Razorpay, government bodies and your advisers, so the **30 Nov 2026 date depends on them**.
+Engineering status (23 Nov 2026): the code is complete for a controlled pilot, and 62 automated tests pass (see `QA_AUDIT_REPORT.md`). Nothing below has been obtained or approved yet. None of it can be done by engineering alone. Review times are set by Meta, Razorpay, government bodies and your advisers, so the **30 Nov 2026 date depends on them**.
 
 Legend: 🔑 credential you must create · ✅ external approval · ⚖️ legal/tax/compliance advice · 🧑‍🤝‍🧑 operational action
 

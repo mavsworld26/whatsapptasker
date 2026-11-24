@@ -116,13 +116,31 @@ export function withdraw(m, phone, raw) {
   m.say(phone, 'offer_withdrawn', { id: shortId(task.id) });
 }
 
-export function done(m, phone, raw) {
+// Anti-fraud timing: a job can be started at most 2h before, and marked done at most 30 min before, its start time.
+export const START_WINDOW_MS = 2 * 3600000;
+export const DONE_EARLIEST_MS = 30 * 60000;
+
+/** Tasker reached the location and started work. */
+export function arrived(m, phone, raw) {
   const task = m.task(parseTaskId(raw));
   const offer = m.acceptedOffer(task);
   if (!task || offer?.worker_phone !== phone) return m.say(phone, 'not_found');
   if (task.status !== 'booked') return m.say(phone, 'not_allowed');
+  if (m.now() < task.scheduled_at - START_WINDOW_MS) return m.say(phone, 'too_early', { id: shortId(task.id) });
+  m.transition(task.id, ['booked'], 'in_progress');
+  m.say(phone, 'started_worker', { id: shortId(task.id) });
+  m.say(task.customer_phone, 'started_customer', { id: shortId(task.id) }, { template: { key: 'generic_update', params: [shortId(task.id), 'tasker has started'] } });
+  m.audit(phone, 'task_started', task.id);
+}
+
+export function done(m, phone, raw) {
+  const task = m.task(parseTaskId(raw));
+  const offer = m.acceptedOffer(task);
+  if (!task || offer?.worker_phone !== phone) return m.say(phone, 'not_found');
+  if (!['booked', 'in_progress'].includes(task.status)) return m.say(phone, 'not_allowed');
+  if (m.now() < task.scheduled_at - DONE_EARLIEST_MS) return m.say(phone, 'too_early', { id: shortId(task.id) });
   const autoAt = m.now() + m.config.autoConfirmHours * 3600000;
-  m.transition(task.id, ['booked'], 'awaiting_confirmation', { auto_confirm_at: autoAt });
+  m.transition(task.id, ['booked', 'in_progress'], 'awaiting_confirmation', { auto_confirm_at: autoAt });
   const id = shortId(task.id);
   m.say(phone, 'done_worker', { id, hours: m.config.autoConfirmHours });
   m.say(task.customer_phone, 'done_customer', { id, hours: m.config.autoConfirmHours }, {

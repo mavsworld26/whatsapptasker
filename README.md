@@ -36,7 +36,7 @@ npm run demo
 cp .env.example .env && npm start
 ```
 
-- `npm test` runs 37 automated tests: unit, conversation, end-to-end money flows and HTTP security. Razorpay is replaced by an in-memory **test double** that exists only in `test/`.
+- `npm test` runs 62 automated tests: unit, conversation, end-to-end money flows, HTTP security, concurrency, failure injection and fuzzing (see `docs/QA_AUDIT_REPORT.md`). Razorpay is replaced by an in-memory **test double** that exists only in `test/`.
 - `npm run demo` prints a Hinglish customer and tasker conversation. It stops at payment, because payments are not configured in the demo.
 - `npm start` runs in `DRY_RUN` mode: outbound WhatsApp messages are logged, not sent.
 - `npm run check:config` lists everything still missing for live mode. With `DRY_RUN=false` the service **refuses to start** until those items are fixed.
@@ -66,9 +66,9 @@ HTTP surface: `GET /health`, `GET /ready`, `GET|POST /webhooks/whatsapp`, `POST 
 
 ## Commands
 
-Customers: `MENU`, `POST`, `MYJOBS`, `STATUS HYD0001`, `ACCEPT 12`, `PAY HYD0001`, `ADDRESS HYD0001 …`, `MSG HYD0001 …`, `CONFIRM HYD0001`, `DISPUTE HYD0001 …`, `CANCELJOB HYD0001`, `RATE HYD0001 5 comment`, `BUSINESS Company`, `HELP …`, `LANG`, `MYDATA`, `DELETE MY DATA`, `STOP`/`START`. Most of these are also offered as tap buttons or list rows.
+Customers: `MENU`, `POST`, `MYJOBS`, `STATUS HYD0001`, `ACCEPT 12`, `PAY HYD0001`, `ADDRESS HYD0001 …`, `MSG HYD0001 …`, `CONFIRM HYD0001`, `DISPUTE HYD0001 …`, `NOSHOW HYD0001` (tasker didn't come, from 30 min after start), `CANCELJOB HYD0001`, `RATE HYD0001 5 comment`, `BUSINESS Company`, `HELP …`, `LANG`, `MYDATA`, `DELETE MY DATA`, `STOP`/`START`. Most of these are also offered as tap buttons or list rows.
 
-Taskers: `JOIN`, `AVAILABLE`/`UNAVAILABLE`, `TASKS`, `OFFER HYD0001 750 note`, `WITHDRAW HYD0001`, `DONE HYD0001`, `CANCELJOB HYD0001`, `MSG`, `RATE`, `DISPUTE`.
+Taskers: `JOIN`, `AVAILABLE`/`UNAVAILABLE`, `TASKS`, `OFFER HYD0001 750 note`, `WITHDRAW HYD0001`, `ARRIVED HYD0001` (from 2h before start), `DONE HYD0001` (from 30 min before start), `CANCELJOB HYD0001`, `MSG`, `RATE`, `DISPUTE`.
 
 Operators: send `OPSHELP` from an allowlisted number. The runbook is [docs/OPERATIONS.md](docs/OPERATIONS.md).
 

@@ -8,13 +8,14 @@ const truncate = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}
 export function parseWebhook(payload, expectedPhoneNumberId = '') {
   const messages = [];
   const statuses = [];
-  for (const entry of payload?.entry || []) {
-    for (const change of entry?.changes || []) {
+  const list = v => (Array.isArray(v) ? v : []);
+  for (const entry of list(payload?.entry)) {
+    for (const change of list(entry?.changes)) {
       if (change.field !== 'messages') continue;
       const value = change.value || {};
       if (expectedPhoneNumberId && value.metadata?.phone_number_id !== expectedPhoneNumberId) continue;
-      const names = Object.fromEntries((value.contacts || []).map(c => [c.wa_id, c.profile?.name]));
-      for (const msg of value.messages || []) {
+      const names = Object.fromEntries(list(value.contacts).map(c => [c.wa_id, c.profile?.name]));
+      for (const msg of list(value.messages)) {
         const m = { id: msg.id, from: msg.from, type: msg.type, text: '', profileName: names[msg.from] || null, timestamp: Number(msg.timestamp) * 1000 || null };
         if (msg.type === 'text') m.text = msg.text?.body || '';
         else if (msg.type === 'button') m.text = msg.button?.payload || msg.button?.text || '';
@@ -22,7 +23,7 @@ export function parseWebhook(payload, expectedPhoneNumberId = '') {
         else if (msg.type === 'location') m.location = { lat: Number(msg.location?.latitude), lng: Number(msg.location?.longitude) };
         messages.push(m);
       }
-      for (const st of value.statuses || []) {
+      for (const st of list(value.statuses)) {
         if (st.type === 'payment' || st.payment) {
           statuses.push({
             kind: 'payment', id: st.id, status: st.status, recipient: st.recipient_id,

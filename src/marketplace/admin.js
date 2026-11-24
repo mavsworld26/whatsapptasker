@@ -38,9 +38,9 @@ function workerSummary(m, target) {
   return `${target} · ${w.full_name || '-'} · ${w.status}\nArea ${areaLabel(w.home_area)} (${w.radius_km} km) · skills ${JSON.parse(w.skills).join(', ')}\nPayout account: ${w.linked_account_id || 'NOT LINKED'}\nRating ${w.rating_count ? (w.rating_sum / w.rating_count).toFixed(2) : 'n/a'} (${w.rating_count}) · done ${w.jobs_completed} · cancelled ${w.jobs_cancelled}\nChecks: ${checks.map(c => `${c.check_type}✔ (${c.verifier.slice(-4)}, ${c.evidence_ref})`).join(', ') || 'none'}`;
 }
 
-function financeAction(m, phone, { kind, task, amount, reason, ticketId = null }, reply) {
-  const r = m.db.prepare(`INSERT INTO financial_actions(kind,task_id,amount_paise,reason,ticket_id,requested_by,status,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,'awaiting_cosign',?,?)`).run(kind, task.id, amount, reason, ticketId, phone, m.now(), m.now());
+function financeAction(m, phone, { kind, task, amount, reason, ticketId = null, settle = false }, reply) {
+  const r = m.db.prepare(`INSERT INTO financial_actions(kind,task_id,amount_paise,reason,ticket_id,requested_by,status,settle,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,'awaiting_cosign',?,?,?)`).run(kind, task.id, amount, reason, ticketId, phone, settle ? 1 : 0, m.now(), m.now());
   const id = Number(r.lastInsertRowid);
   m.audit(phone, 'finance_action_requested', id, `${kind} ${shortId(task.id)} ${amount} ${reason}`);
   if (!m.config.financeRequireCosign) return executeAction(m, id, phone, reply);
@@ -50,7 +50,16 @@ function financeAction(m, phone, { kind, task, amount, reason, ticketId = null }
   }
 }
 
-/** Executes an approved refund/release. Refund of X (≤ worker share) is clawed back from the worker's transfer. */
+const OPEN_WORK = ['disputed', 'booked', 'in_progress', 'awaiting_confirmation'];
+
+/**
+ * Executes an approved money movement.
+ * - release: job is completed and the tasker's held transfer is released.
+ * - refund, full: everything is returned; the held tasker share is reversed; job → refunded.
+ * - refund, settle (RESOLVE split): X is taken from the tasker's held share and refunded; the rest is released.
+ *   Work done/disputed → completed. Still booked (late cancellation) → cancelled, remainder is the tasker's fee.
+ * - refund, goodwill (REFUND partial): platform-funded; the job and the tasker's payout are untouched.
+ */
 function executeAction(m, id, approver, reply) {
   const a = m.db.prepare('SELECT * FROM financial_actions WHERE id=?').get(id);
   const task = m.task(a.task_id);
@@ -60,19 +69,23 @@ function executeAction(m, id, approver, reply) {
   const tr = m.db.prepare('SELECT * FROM transfers WHERE payment_id=?').get(p.id);
   const transferHeld = tr && ['creating', 'on_hold'].includes(tr.status);
   if (a.kind === 'release') {
-    if (!['disputed', 'booked', 'awaiting_confirmation'].includes(task.status)) return fail(`task status is ${task.status}`);
+    if (!OPEN_WORK.includes(task.status)) return fail(`task status is ${task.status}`);
     if (!transferHeld) return fail('worker transfer is not on hold');
-    completeTask(m, task, approver, { fromStatuses: ['disputed', 'booked', 'awaiting_confirmation'] });
+    completeTask(m, task, approver, { fromStatuses: OPEN_WORK });
   } else {
     const refundable = p.amount_paise - p.refunded_paise;
     if (a.amount_paise > refundable) return fail(`refund exceeds refundable ${money(refundable)}`);
     const full = a.amount_paise === refundable;
-    // Worker share is reversed only while the transfer is still held; after release, refunds come from platform funds.
-    const reverse = transferHeld ? Math.min(a.amount_paise, tr.amount_paise - tr.reversed_paise) : 0;
-    const releaseAfter = !full && transferHeld && ['disputed', 'booked', 'awaiting_confirmation'].includes(task.status);
-    requestRefund(m, { paymentId: p.id, amount: a.amount_paise, reverse, reason: a.reason, actor: approver, releaseAfter });
-    if (full) m.transition(task.id, ['disputed', 'booked', 'awaiting_confirmation', 'completed'], 'refunded', { auto_confirm_at: null });
-    else if (releaseAfter) m.transition(task.id, ['disputed', 'booked', 'awaiting_confirmation'], 'completed', { auto_confirm_at: null });
+    const held = transferHeld ? tr.amount_paise - tr.reversed_paise : 0;
+    const settle = !full && a.settle === 1 && transferHeld && OPEN_WORK.includes(task.status);
+    if (a.settle === 1 && !full && !settle) return fail('a split needs an open job with the tasker payout still on hold');
+    if (settle && a.amount_paise > held) return fail(`split refund exceeds the tasker's held share ${money(held)}`);
+    // Full refunds and settlements claw back from the held tasker share; goodwill refunds are platform-funded.
+    const reverse = full ? held : settle ? a.amount_paise : 0;
+    requestRefund(m, { paymentId: p.id, amount: a.amount_paise, reverse, reason: a.reason, actor: approver, releaseAfter: settle });
+    if (full) m.transition(task.id, [...OPEN_WORK, 'completed'], 'refunded', { auto_confirm_at: null });
+    else if (settle) m.transition(task.id, OPEN_WORK, task.status === 'booked' ? 'cancelled' : 'completed', { auto_confirm_at: null });
+    const releaseAfter = settle;
     const offer = m.acceptedOffer(task);
     m.say(task.customer_phone, 'refund_after_review', { id: shortId(task.id), amount: money(a.amount_paise) }, { template: { key: 'generic_update', params: [shortId(task.id), 'refund requested'] } });
     if (offer) m.sayRaw(offer.worker_phone, `${shortId(task.id)}: after review, ${money(a.amount_paise)} is being refunded to the customer.${releaseAfter ? ` The remaining ${money(Math.max(0, offer.amount_paise - reverse))} will be released to you.` : ''}`);
@@ -236,7 +249,7 @@ const HANDLERS = {
     if (outcome === 'split') {
       const amt = parseRupees(a[2] || '', { min: 1 });
       if (!amt || amt >= offer.amount_paise) return reply(`Split refund must be ₹1 – ${money(offer.amount_paise - 100)} (less than the tasker quote).`);
-      return financeAction(m, p, { kind: 'refund', task, amount: amt, reason: sanitizeText(a.slice(3).join(' '), 200) || 'partial refund', ticketId: ticket.id }, reply);
+      return financeAction(m, p, { kind: 'refund', task, amount: amt, reason: sanitizeText(a.slice(3).join(' '), 200) || 'partial refund', ticketId: ticket.id, settle: true }, reply);
     }
     reply('Usage: RESOLVE 7 release|refund|split <rupees> note');
   },

@@ -2,7 +2,7 @@
 import { parseTaskId, sanitizeText, shortId } from '../parse.js';
 import { LANG_NAMES } from '../i18n.js';
 
-const ACTIVE = ['payment_pending', 'booked', 'awaiting_confirmation', 'disputed'];
+const ACTIVE = ['payment_pending', 'booked', 'in_progress', 'awaiting_confirmation', 'disputed'];
 
 // Phone numbers and UPI handles are masked in relayed chat so payments and contact stay on-platform.
 export function maskContactDetails(text) {
@@ -55,10 +55,10 @@ export function dispute(m, phone, raw, details) {
   if (!task || (task.customer_phone !== phone && offer?.worker_phone !== phone)) return m.say(phone, 'not_found');
   const text = sanitizeText(details, 500);
   if (text.length < 5) return m.say(phone, 'dispute_usage');
-  const holdable = ['booked', 'awaiting_confirmation'].includes(task.status);
+  const holdable = ['booked', 'in_progress', 'awaiting_confirmation'].includes(task.status);
   if (!holdable && task.status !== 'completed' && task.status !== 'disputed') return m.say(phone, 'not_allowed');
   const ticket = openTicket(m, { phone, taskId: task.id, kind: 'dispute', body: text, priorStatus: task.status });
-  if (holdable) m.transition(task.id, ['booked', 'awaiting_confirmation'], 'disputed', { auto_confirm_at: null });
+  if (holdable) m.transition(task.id, ['booked', 'in_progress', 'awaiting_confirmation'], 'disputed', { auto_confirm_at: null });
   const id = shortId(task.id);
   m.say(phone, 'dispute_created', { ticket, id });
   const other = phone === task.customer_phone ? offer?.worker_phone : task.customer_phone;
@@ -69,7 +69,7 @@ export function relay(m, phone, raw, body) {
   const task = m.task(parseTaskId(raw));
   const offer = m.acceptedOffer(task);
   if (!task || !offer || (phone !== task.customer_phone && phone !== offer.worker_phone)) return m.say(phone, 'not_found');
-  if (!['booked', 'awaiting_confirmation', 'disputed'].includes(task.status)) return m.say(phone, 'not_allowed');
+  if (!['booked', 'in_progress', 'awaiting_confirmation', 'disputed'].includes(task.status)) return m.say(phone, 'not_allowed');
   const text = maskContactDetails(sanitizeText(body, 800));
   if (!text) return m.say(phone, 'not_allowed');
   const to = phone === task.customer_phone ? offer.worker_phone : task.customer_phone;

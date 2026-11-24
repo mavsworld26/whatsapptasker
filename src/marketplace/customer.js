@@ -90,7 +90,7 @@ function createTask(m, phone, d) {
 export function eligibleWorkers(m) {
   return m.db.prepare(`SELECT w.*, u.last_inbound_at,
       (SELECT COUNT(*) FROM tasks t JOIN offers o ON o.id=t.accepted_offer_id
-        WHERE o.worker_phone=w.phone AND t.status IN ('payment_pending','booked','awaiting_confirmation')) AS active_jobs
+        WHERE o.worker_phone=w.phone AND t.status IN ('payment_pending','booked','in_progress','awaiting_confirmation')) AS active_jobs
     FROM worker_profiles w JOIN users u ON u.phone=w.phone
     WHERE w.status='approved' AND u.opted_in=1 AND u.blocked=0 AND u.erased_at IS NULL`).all()
     .map(w => ({ ...w, skills: JSON.parse(w.skills) }));
@@ -250,6 +250,10 @@ export function cancelJob(m, phone, raw) {
     m.audit(phone, 'task_cancelled', task.id, 'before payment');
     return m.say(phone, 'cancelled_free', { id });
   }
+  if (task.status === 'in_progress') {
+    const ticket = openTicket(m, { phone, taskId: task.id, kind: 'support', body: 'Cancellation requested after the tasker started' });
+    return m.say(phone, 'cancel_needs_review', { id, hours: m.config.freeCancelHours, ticket });
+  }
   if (task.status === 'booked') {
     const hoursLeft = (task.scheduled_at - m.now()) / 3600000;
     if (hoursLeft >= m.config.freeCancelHours) {
@@ -299,7 +303,7 @@ function workerCancel(m, phone, task, offer) {
 export function address(m, phone, raw, text) {
   const task = m.task(parseTaskId(raw));
   if (!task || task.customer_phone !== phone) return m.say(phone, 'not_found');
-  if (!['booked', 'awaiting_confirmation'].includes(task.status)) return m.say(phone, 'not_allowed');
+  if (!['booked', 'in_progress', 'awaiting_confirmation'].includes(task.status)) return m.say(phone, 'not_allowed');
   const addr = sanitizeText(text, 300);
   if (addr.length < 5) return m.say(phone, 'not_allowed');
   m.db.prepare('UPDATE tasks SET address_note=?, updated_at=? WHERE id=?').run(addr, m.now(), task.id);
@@ -314,4 +318,32 @@ export function business(m, phone, rest) {
   m.db.prepare("UPDATE users SET business_name=?, role=CASE WHEN role='worker' THEN role ELSE 'business' END WHERE phone=?").run(name, phone);
   m.audit(phone, 'business_profile', '', name);
   m.sayRaw(phone, `Business profile set: ${name}. Business service fee rate applies to new bookings.`);
+}
+
+export const NOSHOW_GRACE_MS = 30 * 60000;
+export const NOSHOW_SUSPEND_AFTER = 2;
+
+/** Customer reports that the booked tasker did not turn up (no ARRIVED by start + 30 min): full refund, no payout. */
+export function noShow(m, phone, raw) {
+  const task = m.task(parseTaskId(raw));
+  if (!task || task.customer_phone !== phone) return m.say(phone, 'not_found');
+  if (task.status !== 'booked') return m.say(phone, 'not_allowed');
+  if (m.now() < task.scheduled_at + NOSHOW_GRACE_MS) return m.say(phone, 'noshow_too_early', { id: shortId(task.id) });
+  const offer = m.acceptedOffer(task);
+  const p = m.livePayment(task.id);
+  m.transition(task.id, ['booked'], 'cancelled');
+  requestRefund(m, { paymentId: p.id, amount: p.amount_paise - p.refunded_paise, reverse: p.worker_paise, reason: 'worker_no_show', actor: phone });
+  m.db.prepare('UPDATE worker_profiles SET jobs_cancelled=jobs_cancelled+1, updated_at=? WHERE phone=?').run(m.now(), offer.worker_phone);
+  m.audit(phone, 'worker_no_show', task.id, offer.worker_phone);
+  const noShows = m.db.prepare("SELECT COUNT(*) AS n FROM audit WHERE action='worker_no_show' AND detail=?").get(offer.worker_phone).n;
+  const id = shortId(task.id);
+  m.say(phone, 'noshow_customer', { id, amount: money(p.amount_paise - p.refunded_paise) });
+  m.say(offer.worker_phone, 'noshow_worker', { id }, { template: { key: 'generic_update', params: [id, 'reported as no-show'] } });
+  if (noShows >= NOSHOW_SUSPEND_AFTER) {
+    m.db.prepare("UPDATE worker_profiles SET status='suspended', available=0, updated_at=? WHERE phone=? AND status='approved'").run(m.now(), offer.worker_phone);
+    m.db.prepare("UPDATE offers SET status='withdrawn', updated_at=? WHERE worker_phone=? AND status='active'").run(m.now(), offer.worker_phone);
+    m.audit('system', 'worker_suspended', offer.worker_phone, `${noShows} no-shows`);
+    m.say(offer.worker_phone, 'worker_suspended');
+  }
+  m.ops(`No-show reported on ${id} for tasker ${offer.worker_phone} (${noShows} total${noShows >= NOSHOW_SUSPEND_AFTER ? ', auto-suspended' : ''}). Full refund queued.`, 'support');
 }

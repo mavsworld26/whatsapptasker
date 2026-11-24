@@ -245,11 +245,14 @@ const MIGRATIONS = [
   );
   CREATE INDEX idx_audit_ref ON audit(ref);
   `,
+  // 2: operator refunds that settle a job (dispute split / late-cancellation fee) vs platform-funded goodwill.
+  `ALTER TABLE financial_actions ADD COLUMN settle INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export function createDb(filePath = ':memory:') {
   if (filePath !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
   const db = new DatabaseSync(filePath);
+  if (filePath !== ':memory:') fs.chmodSync(filePath, 0o600); // owner-only; WAL/SHM files inherit this mode
   db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;');
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)');
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));

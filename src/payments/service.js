@@ -8,6 +8,8 @@ import { money, shortId } from '../parse.js';
 import { markCaptured, paymentCreationFailed, paymentRequestReady } from '../marketplace/payflow.js';
 
 const row = (db, sql, ...a) => db.prepare(sql).get(...a);
+const UNKNOWN = 'unknown_outcome';
+export const RECONCILE_WAIT_MS = 10 * 60000; // before re-creating something whose earlier creation may have succeeded
 
 export function createPaymentHandlers(market, razorpay) {
   const { db } = market;
@@ -46,7 +48,15 @@ export function createPaymentHandlers(market, razorpay) {
         tx(() => paymentCreationFailed(market, p.id, `link mismatch ${link.id}`));
         return;
       }
-      tx(() => paymentRequestReady(market, p.id, { linkId: link.id, shortUrl: link.short_url }));
+      tx(() => {
+        // The booking may have been cancelled or expired while we were talking to Razorpay: never leave a payable link.
+        if (row(db, 'SELECT status FROM payments WHERE id=?', p.id).status !== 'creating') {
+          db.prepare('UPDATE payments SET provider_link_id=COALESCE(provider_link_id, ?), updated_at=? WHERE id=?').run(link.id, market.now(), p.id);
+          market.job('payment.cancel_link', { paymentId: p.id }, { dedupeKey: `payment.cancel_link:${p.id}` });
+          return;
+        }
+        paymentRequestReady(market, p.id, { linkId: link.id, shortUrl: link.short_url });
+      });
     },
 
     async 'payment.cancel_link'({ paymentId }) {
@@ -93,14 +103,19 @@ export function createPaymentHandlers(market, razorpay) {
       if (amount <= 0) { tx(() => db.prepare("UPDATE transfers SET status='reversed', updated_at=? WHERE id=?").run(market.now(), tr.id)); return; }
       const p = row(db, 'SELECT * FROM payments WHERE id=?', tr.payment_id);
       const ref = `T${tr.id}`;
-      let transfer;
-      try {
-        const res = await razorpay.createTransfer(p.provider_payment_id, { account: tr.linked_account_id, amountPaise: amount, onHold: true, notes: { transfer_ref: ref, task: shortId(tr.task_id) } });
-        transfer = res.items?.[0] || res;
-      } catch (err) {
-        const list = await razorpay.listTransfers(p.provider_payment_id).catch(() => null);
-        transfer = list?.items?.find(x => x.notes?.transfer_ref === ref);
-        if (!transfer) throw err;
+      // Check-before-create: a previous attempt may have reached Razorpay even though we saw an error.
+      let transfer = (await razorpay.listTransfers(p.provider_payment_id))?.items?.find(x => x.notes?.transfer_ref === ref);
+      if (!transfer && tr.last_error?.startsWith(UNKNOWN) && market.now() - tr.updated_at < RECONCILE_WAIT_MS) {
+        throw new RetryLater('previous transfer attempt had an unknown outcome; waiting for Razorpay to reflect it', RECONCILE_WAIT_MS);
+      }
+      if (!transfer) {
+        try {
+          const res = await razorpay.createTransfer(p.provider_payment_id, { account: tr.linked_account_id, amountPaise: amount, onHold: true, notes: { transfer_ref: ref, task: shortId(tr.task_id) } });
+          transfer = res.items?.[0] || res;
+        } catch (err) {
+          if (err.retryable) tx(() => db.prepare('UPDATE transfers SET last_error=?, updated_at=? WHERE id=?').run(`${UNKNOWN}: ${String(err.message).slice(0, 200)}`, market.now(), tr.id));
+          throw err.retryable ? new RetryLater(`transfer outcome unknown: ${err.message}`, RECONCILE_WAIT_MS) : err;
+        }
       }
       tx(() => db.prepare("UPDATE transfers SET provider_transfer_id=?, amount_paise=?, reversed_paise=0, status='on_hold', updated_at=? WHERE id=? AND status='creating'")
         .run(transfer.id, amount, market.now(), tr.id));
@@ -111,7 +126,9 @@ export function createPaymentHandlers(market, razorpay) {
       if (!tr || tr.status === 'released' || tr.status === 'reversed') return;
       if (tr.status === 'creating') throw new RetryLater('transfer not created yet', 20000);
       const task = market.task(tr.task_id);
-      if (task.status !== 'completed') throw Object.assign(new Error(`Refusing release: ${shortId(task.id)} is ${task.status}`), { retryable: false });
+      // Released only for finished jobs, or a cancelled job whose remaining share is an operator-approved cancellation fee.
+      const settledFee = task.status === 'cancelled' && row(db, "SELECT 1 FROM financial_actions WHERE task_id=? AND settle=1 AND status='executed'", task.id);
+      if (task.status !== 'completed' && !settledFee) throw Object.assign(new Error(`Refusing release: ${shortId(task.id)} is ${task.status}`), { retryable: false });
       await razorpay.setTransferHold(tr.provider_transfer_id, false);
       tx(() => {
         db.prepare("UPDATE transfers SET status='released', updated_at=? WHERE id=?").run(market.now(), tr.id);
@@ -128,7 +145,17 @@ export function createPaymentHandlers(market, razorpay) {
       const ref = `R${rf.id}`;
       // 1) Claw back the worker share from the Route transfer, if any.
       if (rf.status === 'queued') {
-        const tr = row(db, 'SELECT * FROM transfers WHERE payment_id=?', p.id);
+        let tr = row(db, 'SELECT * FROM transfers WHERE payment_id=?', p.id);
+        if (tr?.status === 'creating' && rf.reverse_paise > 0) {
+          // The transfer job may have created it at Razorpay before failing locally: adopt it so it gets reversed.
+          const list = await razorpay.listTransfers(p.provider_payment_id);
+          const existing = list?.items?.find(x => x.notes?.transfer_ref === `T${tr.id}`);
+          if (existing) {
+            tx(() => db.prepare("UPDATE transfers SET provider_transfer_id=?, amount_paise=?, reversed_paise=0, status='on_hold', updated_at=? WHERE id=? AND status='creating'")
+              .run(existing.id, existing.amount, market.now(), tr.id));
+            tr = row(db, 'SELECT * FROM transfers WHERE id=?', tr.id);
+          }
+        }
         const reverse = tr ? Math.min(rf.reverse_paise, tr.amount_paise - tr.reversed_paise) : 0;
         if (reverse > 0 && tr.status === 'creating') {
           tx(() => {
@@ -136,13 +163,8 @@ export function createPaymentHandlers(market, razorpay) {
             db.prepare("UPDATE refunds SET status='reversed', provider_reversal_id='not_transferred', updated_at=? WHERE id=?").run(market.now(), rf.id);
           });
         } else if (reverse > 0 && tr.status === 'on_hold') {
-          let reversal;
-          try { reversal = await razorpay.reverseTransfer(tr.provider_transfer_id, reverse, { refund_ref: ref }); }
-          catch (err) {
-            const list = await razorpay.listReversals(tr.provider_transfer_id).catch(() => null);
-            reversal = list?.items?.find(x => x.notes?.refund_ref === ref);
-            if (!reversal) throw err;
-          }
+          let reversal = (await razorpay.listReversals(tr.provider_transfer_id))?.items?.find(x => x.notes?.refund_ref === ref);
+          if (!reversal) reversal = await razorpay.reverseTransfer(tr.provider_transfer_id, reverse, { refund_ref: ref });
           tx(() => {
             db.prepare("UPDATE transfers SET reversed_paise=reversed_paise+?, status=CASE WHEN amount_paise-reversed_paise-?<=0 THEN 'reversed' ELSE status END, updated_at=? WHERE id=?").run(reverse, reverse, market.now(), tr.id);
             db.prepare("UPDATE refunds SET status='reversed', provider_reversal_id=?, updated_at=? WHERE id=?").run(reversal.id, market.now(), rf.id);
@@ -155,13 +177,8 @@ export function createPaymentHandlers(market, razorpay) {
       }
       // 2) Refund the customer.
       if (rf.status === 'reversed') {
-        let refund;
-        try { refund = await razorpay.refundPayment(p.provider_payment_id, { amountPaise: rf.amount_paise, receipt: ref, notes: { refund_ref: ref, reason: rf.reason.slice(0, 200) } }); }
-        catch (err) {
-          const list = await razorpay.listRefunds(p.provider_payment_id).catch(() => null);
-          refund = list?.items?.find(x => x.notes?.refund_ref === ref);
-          if (!refund) throw err;
-        }
+        let refund = (await razorpay.listRefunds(p.provider_payment_id))?.items?.find(x => x.notes?.refund_ref === ref);
+        if (!refund) refund = await razorpay.refundPayment(p.provider_payment_id, { amountPaise: rf.amount_paise, receipt: ref, notes: { refund_ref: ref, reason: rf.reason.slice(0, 200) } });
         tx(() => {
           db.prepare('UPDATE refunds SET status=?, provider_refund_id=?, updated_at=? WHERE id=?').run(refund.status === 'processed' ? 'processed' : 'requested', refund.id, market.now(), rf.id);
           if (refund.status === 'processed') notifyRefundProcessed(market, rf, refund.id);
